@@ -1,0 +1,245 @@
+@startuml
+title СМО, вариант 11: диаграмма классов
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+hide empty members
+
+enum EventType {
+  GENERATE
+  DEVICE_FREE
+}
+
+enum RequestStatus {
+  CREATED
+  IN_BUFFER
+  IN_SERVICE
+  SERVED
+  EVICTED
+}
+
+class Request {
+  -id: long
+  -sourceId: int
+  -arrivalTime: double
+  -serviceStartTime: double
+  -serviceEndTime: double
+  -status: RequestStatus
+  --
+  +getId(): long
+  +getSourceId(): int
+  +getArrivalTime(): double
+  +getStatus(): RequestStatus
+  +markInBuffer(): void
+  +markInService(t: double): void
+  +markServed(t: double): void
+  +markEvicted(t: double): void
+  +getWaitTime(): double
+  +getSystemTime(): double
+}
+
+class Source <<ИБ, ИЗ1>> {
+  -id: int
+  -lambda: double
+  -random: Random
+  -requestCounter: long
+  --
+  +generate(now: double): Request
+  +nextArrivalTime(now: double): double
+}
+
+class EvictionResult {
+  -evicted: Request
+  -slotIndex: int
+  --
+  +getEvicted(): Request
+  +getSlotIndex(): int
+}
+
+class Buffer <<Д1ОЗ3, Д1ОО3, Д2Б2>> {
+  -slots: Request[]
+  -capacity: int
+  --
+  +put(request: Request): int
+  +putAt(slotIndex: int, request: Request): void
+  +removeOldest(): EvictionResult
+  +takeNewest(): Request
+  +isFull(): boolean
+  +isEmpty(): boolean
+  +size(): int
+  +snapshot(): Request[]
+}
+
+class Device <<ПЗ2>> {
+  -number: int
+  -busy: boolean
+  -currentRequest: Request
+  -finishTime: double
+  -totalBusyTime: double
+  -minServiceTime: double
+  -maxServiceTime: double
+  -random: Random
+  --
+  +isFree(): boolean
+  +start(request: Request, now: double): double
+  +finish(now: double): Request
+  +getNumber(): int
+  +getTotalBusyTime(): double
+}
+
+class DevicePool <<Д2П1>> {
+  -devices: List<Device>
+  --
+  +findFreeDevice(): Device
+  +getDevices(): List<Device>
+}
+
+class Event {
+  -time: double
+  -type: EventType
+  -sourceId: int
+  -deviceNumber: int
+  --
+  +getTime(): double
+  +getType(): EventType
+  +getSourceId(): int
+  +getDeviceNumber(): int
+}
+
+class EventCalendar {
+  -queue: PriorityQueue<Event>
+  -journal: List<JournalRecord>
+  --
+  +schedule(event: Event): void
+  +pollNext(): Event
+  +isEmpty(): boolean
+  +peekAll(): List<Event>
+  +log(record: JournalRecord): void
+  +getJournal(): List<JournalRecord>
+}
+
+class JournalRecord {
+  -time: double
+  -description: String
+  --
+  +getTime(): double
+  +getDescription(): String
+}
+
+class DispatcherIn <<Д1ОЗ3, Д1ОО3>> {
+  -buffer: Buffer
+  -devicePool: DevicePool
+  -calendar: EventCalendar
+  -statistics: Statistics
+  --
+  +accept(request: Request, now: double): void
+  -startOnDevice(request: Request, device: Device, now: double): void
+  -placeInBuffer(request: Request, now: double): void
+}
+
+class DispatcherOut <<Д2Б2, Д2П1>> {
+  -buffer: Buffer
+  -devicePool: DevicePool
+  -calendar: EventCalendar
+  -statistics: Statistics
+  --
+  +onDeviceFree(device: Device, now: double): void
+}
+
+class Statistics <<ОР1>> {
+  -generated: int
+  -served: int
+  -evicted: int
+  -sumWaitTime: double
+  -sumSystemTime: double
+  -startedCount: int
+  --
+  +onGenerated(request: Request): void
+  +onServiceStarted(request: Request, device: Device, now: double): void
+  +onServed(request: Request, device: Device, now: double): void
+  +onEvicted(request: Request, now: double): void
+  +buildSummary(endTime: double, devices: List<Device>): SummaryReport
+}
+
+class SummaryReport {
+  -generated: int
+  -served: int
+  -evicted: int
+  -rejectProbability: double
+  -avgSystemTime: double
+  -avgWaitTime: double
+  -deviceUtilization: double[]
+  --
+  +getRejectProbability(): double
+  +getAvgSystemTime(): double
+  +getAvgWaitTime(): double
+  +getDeviceUtilization(): double[]
+}
+
+class StateView <<ОД2>> {
+  -out: PrintStream
+  --
+  +render(now: double, sources: List<Source>, buffer: Buffer, pool: DevicePool, calendar: EventCalendar, statistics: Statistics): void
+  +renderSummary(report: SummaryReport): void
+}
+
+class SimulationEngine {
+  -now: double
+  -endTime: double
+  -sources: List<Source>
+  -calendar: EventCalendar
+  -dispatcherIn: DispatcherIn
+  -dispatcherOut: DispatcherOut
+  -buffer: Buffer
+  -devicePool: DevicePool
+  -statistics: Statistics
+  -view: StateView
+  --
+  +init(): void
+  +step(): boolean
+  +runAuto(): SummaryReport
+  -handleGenerate(event: Event): void
+  -handleDeviceFree(event: Event): void
+}
+
+SimulationEngine o--> "1..*" Source
+SimulationEngine --> EventCalendar
+SimulationEngine --> DispatcherIn
+SimulationEngine --> DispatcherOut
+SimulationEngine --> Buffer
+SimulationEngine --> DevicePool
+SimulationEngine --> Statistics
+SimulationEngine --> StateView
+
+DispatcherIn --> Buffer : buffer
+DispatcherIn --> DevicePool : devicePool
+DispatcherIn --> EventCalendar : calendar
+DispatcherIn --> Statistics : statistics
+
+DispatcherOut --> Buffer : buffer
+DispatcherOut --> DevicePool : devicePool
+DispatcherOut --> EventCalendar : calendar
+DispatcherOut --> Statistics : statistics
+
+DevicePool *--> "1..*" Device
+Buffer o--> "0..capacity" Request
+Device --> "0..1" Request : currentRequest
+Source ..> Request : создаёт
+Buffer ..> EvictionResult : возвращает
+EvictionResult --> Request
+EventCalendar *--> "0..*" Event
+EventCalendar *--> "0..*" JournalRecord
+Event --> EventType
+Request --> RequestStatus
+Statistics ..> SummaryReport : создаёт
+StateView ..> SummaryReport
+
+note bottom of DispatcherIn
+  Вариация "диспетчер постановки может отправлять заявку
+  сразу на прибор" (как в описании бизнес-домена).
+  Поэтому у него есть ссылка на DevicePool.
+end note
+
+note bottom of DispatcherOut
+  Запускается только триггером DEVICE_FREE из календаря.
+end note
+@enduml

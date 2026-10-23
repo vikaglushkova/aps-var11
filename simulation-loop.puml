@@ -1,0 +1,26 @@
+@startuml
+title Общий цикл моделирования
+|Engine|
+start
+:Инициализация: буфер пуст, приборы свободны,\nстатистика обнулена, now = 0;
+|Источник|
+:Запланировать первый GENERATE\nв момент Exp(λ) (ИЗ1);
+|Engine|
+repeat
+  |Календарь событий|
+  :pollNext(): ближайшее событие,\nnow = event.time;
+  |Engine|
+  if (Тип события?) then (GENERATE)
+    :→ «Генерация кадра и постановка»\n(task-generation-and-placement);
+  else (DEVICE_FREE)
+    :→ «Завершение обслуживания»\n(end-of-service)\nи затем «Выбор заявки»\n(task-selection);
+  endif
+  if (Пошаговый режим?) then (да)
+    :ОД2: схема модели, состояние источников,\nбуфера, приборов, календарь событий, % отказа;
+  else (нет)
+  endif
+repeat while (now < T_end и календарь не пуст?) is (да) not (нет)
+|Статистика|
+:buildSummary(T_end) — ОР1;
+stop
+@enduml

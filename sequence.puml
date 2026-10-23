@@ -1,0 +1,114 @@
+@startuml
+title СМО, вариант 11: система оперативного анализа видеопотока\nГлавный сиквенс (HappyFlow, постановка в буфер, отказ через вытеснение, выборка из буфера)
+autonumber
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam sequenceMessageAlign left
+
+participant "Source\n(ИБ, ИЗ1)" as Src
+participant "SimulationEngine" as Eng
+participant "EventCalendar" as Cal
+participant "DispatcherIn\n(Д1ОЗ3, Д1ОО3)" as DIn
+participant "DevicePool\n(Д2П1)" as Pool
+participant "Buffer" as Buf
+participant "Device_k\n(ПЗ2)" as Dev
+participant "DispatcherOut\n(Д2Б2, Д2П1)" as DOut
+participant "Statistics\n(ОР1)" as Stat
+participant "StateView\n(ОД2)" as View
+
+legend right
+  Расшифровка кода варианта 11: ИБ ИЗ1 ПЗ2 Д1ОЗ3 Д1ОО3 Д2П1 Д2Б2 ОР1 ОД2
+  ИБ — бесконечный источник (камера не прекращает формировать кадры)
+  ИЗ1 — пуассоновский поток: интервалы между кадрами ~ Exp(λ)
+  ПЗ2 — время обслуживания (анализа кадра) ~ U(a, b), равномерное
+  Д1ОЗ3 — постановка в буфер на свободное место (первая свободная позиция с начала, без сдвига)
+  Д1ОО3 — отказ: при полном буфере вытесняется самая старая заявка, на её место встаёт новая
+  Д2П1 — выбор прибора по приоритету номера (наименьший номер среди свободных)
+  Д2Б2 — выбор заявки из буфера по LIFO (последняя поступившая)
+  ОР1 — сводная таблица результатов; ОД2 — схема модели и текущее состояние в пошаговом режиме
+end legend
+
+note over Eng, Cal
+  Диспетчеры сами не работают "по времени": их запускают триггерные события из календаря.
+  GENERATE запускает DispatcherIn, DEVICE_FREE запускает DispatcherOut.
+end note
+
+Eng -> Cal: schedule(GENERATE, t0, sourceId)
+
+loop пока now < T_end (цикл ожидания следующего события)
+  Eng -> Cal: pollNext()
+  Cal --> Eng: Event(type, time, ref)
+  Eng -> Eng: now = event.time
+
+  alt event.type == GENERATE (камера сформировала кадр)
+    Eng -> Src: generate(now)
+    note right of Src: ИБ: источник бесконечный, заявки поступают независимо\nот загрузки приборов
+    Src --> Eng: Request(id, sourceId, arrivalTime = now)
+    Eng -> Stat: onGenerated(request)
+    Eng -> Src: nextArrivalTime(now)
+    note right of Src: ИЗ1: now + Exp(λ)
+    Src --> Eng: tNext
+    Eng -> Cal: schedule(GENERATE, tNext, sourceId)
+    Eng -> DIn: accept(request, now)
+    DIn -> Pool: findFreeDevice()
+    note right of Pool: Д2П1: перебор приборов начиная с наименьшего номера
+    Pool --> DIn: Device_k или null
+
+    alt КЕЙС 1, HappyFlow: есть свободный прибор (буфер свободен, заявка сразу на прибор)
+      DIn -> Dev: start(request, now)
+      note right of Dev: ПЗ2: длительность ~ U(a, b)
+      Dev --> DIn: finishTime
+      DIn -> Cal: schedule(DEVICE_FREE, finishTime, Device_k)
+      DIn -> Stat: onServiceStarted(request, Device_k, now)
+    else все приборы заняты (приборы не отказывают, они только заняты)
+      DIn -> Buf: isFull()
+      Buf --> DIn: true / false
+
+      alt КЕЙС 2: буфер не полон, постановка в буфер (Д1ОЗ3)
+        DIn -> Buf: put(request)
+        note right of Buf: Д1ОЗ3: первая свободная позиция с начала буфера,\nуже лежащие заявки не сдвигаются
+        Buf --> DIn: slotIndex
+      else КЕЙС 3: буфер полон, ОТКАЗ — вытеснение самой старой заявки (Д1ОО3)
+        DIn -> Buf: removeOldest()
+        note right of Buf: Д1ОО3: заявка с минимальным arrivalTime покидает буфер
+        Buf --> DIn: EvictionResult(evictedRequest, slotIndex)
+        DIn -> Stat: onEvicted(evictedRequest, now)
+        DIn -> Buf: putAt(slotIndex, request)
+        note right of Buf: новая заявка занимает освободившееся место
+        Buf --> DIn: ok
+      end
+    end
+
+  else event.type == DEVICE_FREE (прибор закончил анализ кадра)
+    Eng -> Dev: finish(now)
+    Dev --> Eng: servedRequest
+    Eng -> Stat: onServed(servedRequest, Device_k, now)
+    Eng -> DOut: onDeviceFree(Device_k, now)
+    DOut -> Buf: isEmpty()
+    Buf --> DOut: true / false
+
+    alt КЕЙС 4: буфер пуст, прибор остаётся свободным
+      DOut -> DOut: ничего не делать, ждать следующий GENERATE
+    else КЕЙС 5: в буфере есть заявки, выборка из буфера (Д2Б2) и постановка на прибор
+      DOut -> Buf: takeNewest()
+      note right of Buf: Д2Б2 (LIFO): заявка с максимальным arrivalTime,\nпозиция освобождается без сдвига остальных
+      Buf --> DOut: request
+      DOut -> Pool: findFreeDevice()
+      note right of Pool: Д2П1: наименьший номер среди свободных\n(если буфер не пуст, свободен только освободившийся прибор)
+      Pool --> DOut: Device_k
+      DOut -> Dev: start(request, now)
+      Dev --> DOut: finishTime
+      DOut -> Cal: schedule(DEVICE_FREE, finishTime, Device_k)
+      DOut -> Stat: onServiceStarted(request, Device_k, now)
+    end
+  end
+
+  Eng -> View: render(now, sources, buffer, devices, calendar, stat)
+  note right of View: ОД2: схема модели + текущее состояние на каждом шаге,\nтаблица календаря событий
+end
+
+Eng -> Stat: buildSummary(T_end)
+Stat --> Eng: SummaryReport
+Eng -> View: renderSummary(report)
+note right of View: ОР1: сводная таблица (поступило, обработано, вытеснено,\nP отказа, среднее время в системе, ожидания, загрузка приборов)
+@enduml

@@ -1,0 +1,13 @@
+@startuml
+title Завершение обслуживания кадра
+|Календарь событий|
+start
+:Событие DEVICE_FREE(t, прибор k);
+|Прибор|
+:finish(t): busyTime += t − serviceStartTime,\ncurrent = null;
+|Статистика|
+:onServed: served++,\nвремя в системе = t − arrivalTime;
+|Диспетчер выбора|
+:onDeviceFree(device, t) — триггер\nвыбора из буфера;
+stop
+@enduml
